@@ -1,0 +1,256 @@
+/***************************** (C) COPYRIGHT 2016 RMH Info&Tech Co.,LTD. ********************************
+* File Name  : comm_link.c
+* Author     : RMH R&D Center
+* Version	 : V1.0.0
+* Date       : 2015-5-5
+* Description: 
+*********************************************************************************************************
+*********************************************************************************************************
+* History:
+*--------------------------------------------------------------------------------------------------------
+*|   Date       | Version   |   Description
+*| 2015-5-17    | V1.0.0    |  First release
+*********************************************************************************************************/
+#include "comm_link.h"
+
+typedef struct{
+	link_pkt_format_t	RxFrame;
+	uint8_t		bRxDone;
+	uint8_t		bRxState;
+	uint32_t	wRxPldLen;
+	uint32_t	wRxIndex;
+	uint8_t		bRxTimerEn;
+	uint16_t	hRxTimerCnt;
+	
+	link_pkt_format_t	TxFrame;
+	uint8_t		bTxDone;
+	uint8_t		bTxState;
+	uint32_t	wTxPldLen;
+	uint32_t	wTxIndex;
+}comm_port_t;
+
+static comm_port_t g_Comm[COM_LINK_MAX_PORT];
+static uint8_t g_bCommAddr = 0xFF;
+
+/*********************************************************************************************************
+** Function name:		Comm_LinkInit
+** Descriptions:		Á´Â·²ã³õÊ¼»¯
+** parameters:			wLinkAddr--Á´Â·Í¨ÐÅµØÖ·
+** Returned value:		None
+*********************************************************************************************************/
+void Comm_LinkInit(uint8_t bComAddr)
+{
+	uint8_t i;
+	
+	g_bCommAddr = bComAddr;
+	for(i = 0;i < COM_LINK_MAX_PORT; ++i)
+	{
+		g_Comm[i].RxFrame.bSof	= 0x00;
+		g_Comm[i].RxFrame.bAddr	= 0;
+		g_Comm[i].RxFrame.bLenH = 0;
+		g_Comm[i].RxFrame.bLenL = 0;
+		memset(g_Comm[i].RxFrame.baPld, 0, LINK_PLD_MAX_SIZE);
+		g_Comm[i].RxFrame.bCRC	= 0;
+	
+		g_Comm[i].bRxDone		= 0;
+		g_Comm[i].bRxState		= 0;
+		g_Comm[i].wRxPldLen		= 0;
+		g_Comm[i].wRxIndex		= 0;
+		g_Comm[i].bRxTimerEn	= 0;
+		g_Comm[i].hRxTimerCnt	= 0;
+		
+		g_Comm[i].TxFrame.bSof	= 0x00;
+		g_Comm[i].TxFrame.bAddr	= 0;
+		g_Comm[i].TxFrame.bLenH = 0;
+		g_Comm[i].TxFrame.bLenL = 0;
+		memset(g_Comm[i].TxFrame.baPld, 0, LINK_PLD_MAX_SIZE);
+		g_Comm[i].TxFrame.bCRC	= 0;
+	
+		g_Comm[i].bTxDone		= 1;
+		g_Comm[i].bTxState		= 0;
+		g_Comm[i].wTxPldLen		= 0;
+		g_Comm[i].wTxIndex		= 0;
+	}// end of for()...
+}
+
+/*********************************************************************************************************
+** Function name:		Comm_SetMyCommAddr
+** Descriptions:		ÉèÖÃ±¾»úÍ¨ÐÅµØÖ·
+** parameters:			bComAddr--Ö¸³ö±¾»úµØÖ·
+** Returned value:		None
+*********************************************************************************************************/
+void Comm_SetMyCommAddr(uint8_t bComAddr)
+{
+	g_bCommAddr = bComAddr;
+}
+
+/*********************************************************************************************************
+** Function name:		Comm_GetMyCommAddr
+** Descriptions:		»ñÈ¡±¾»úÍ¨ÐÅµØÖ·
+** parameters:			None
+** Returned value:		±¾»úµØÖ·
+*********************************************************************************************************/
+uint8_t Comm_GetMyCommAddr(void)
+{
+	return (g_bCommAddr);
+}
+
+/*********************************************************************************************************
+** Function name:		Comm_LinkRxByte
+** Descriptions:		×Ö½ÚÁ÷½ÓÊÕº¯Êý
+** parameters:			bCOMn = 0 - COM_LINK_MAX_PORT.
+** 						bRxDataÀ´ÖÁÏÂÒ»²ãµÄ½ÓÊÕÊý¾Ý
+** Returned value:		None
+*********************************************************************************************************/
+void Comm_LinkRxByte(uint8_t bCOMn, uint8_t bRxData)
+{	
+	static uint8_t m_bRxPldLenMSByte = 0;
+	static uint8_t m_bRxCRC	= 0;
+ 	
+	switch(g_Comm[bCOMn].bRxState)
+	{
+		case 0:	// ¼àÌýÖ¡Í·
+			if(g_Comm[bCOMn].bRxDone)
+				break;									// ½ÓÊÕÁ´Â·ÓÐÊý¾ÝÎ´´¦Àí
+			if(bRxData != FRAME_TYPE_CMD)
+				break;
+			g_Comm[bCOMn].RxFrame.bSof		= bRxData;
+			g_Comm[bCOMn].hRxTimerCnt		= 0;		// ×Ö·û¼ä¸ô³¬Ê±¶¨Ê±Æ÷ÇåÁã
+			g_Comm[bCOMn].bRxTimerEn		= 1;		// ¿ªÆô×Ö·û¼ä¸ô³¬Ê±¶¨Ê±Æ÷	
+			g_Comm[bCOMn].bRxState			= 1;		// ½øÈë¼àÌýµØÖ·×´Ì¬
+			
+			m_bRxCRC						=  bRxData;
+			break;
+			
+		case 1:	// ¼àÌýµØÖ·
+			g_Comm[bCOMn].hRxTimerCnt		= 0;		// ×Ö·û¼ä¸ô³¬Ê±¶¨Ê±Æ÷ÇåÁã
+			if( (bRxData != g_bCommAddr) && (bRxData != 0xFF) )
+			{// ·Ç±¾»úµØÖ·»ò¹ã²¥µØÖ·
+				g_Comm[bCOMn].bRxTimerEn	= 0;		// ¹Ø±Õ×Ö·û¼ä¸ô³¬Ê±¶¨Ê±Æ÷
+				g_Comm[bCOMn].bRxState		= 0;		// ·µ»Ø¼àÌýÖ¡Í·×´Ì¬
+			}
+			else
+			{// ±¾»úµØÖ·
+				g_Comm[bCOMn].RxFrame.bAddr	= bRxData;
+				g_Comm[bCOMn].bRxState		= 2;		// ½øÈë¼àÌýÊý¾Ý°ü³¤¶È×´Ì¬
+				m_bRxPldLenMSByte			= 1;		// ×¼±¸½ÓÊÕ³¤¶ÈÓòµÄMSByte
+				
+				m_bRxCRC					+=  bRxData;
+			}
+			break;
+			
+		case 2:	// ¼àÌý³¤¶È
+			g_Comm[bCOMn].hRxTimerCnt		= 0;		// ×Ö·û¼ä¸ô³¬Ê±¶¨Ê±Æ÷ÇåÁã
+			if(m_bRxPldLenMSByte)
+			{// ½ÓÊÕ³¤¶ÈÓòµÄMSByte
+				g_Comm[bCOMn].RxFrame.bLenH	= bRxData;	
+				m_bRxPldLenMSByte = 0;					// ×¼±¸½ÓÊÕ³¤¶ÈÓòµÄLSByte
+			}
+			else
+			{// ½ÓÊÕ³¤¶ÈÓòµÄLSByte
+				g_Comm[bCOMn].RxFrame.bLenL	= bRxData;
+				g_Comm[bCOMn].bRxState		= 3;		// ½øÈë½ÓÊÕPayload×´Ì¬
+				g_Comm[bCOMn].wRxIndex		= 0;
+				g_Comm[bCOMn].wRxPldLen		= (g_Comm[bCOMn].RxFrame.bLenH<<8) + (g_Comm[bCOMn].RxFrame.bLenL) - 1;
+			}
+				
+			m_bRxCRC						+=  bRxData;
+			break;
+		
+		case 3:	// ½ÓÊÕPayload
+			g_Comm[bCOMn].hRxTimerCnt		= 0;		// ×Ö·û¼ä¸ô³¬Ê±¶¨Ê±Æ÷ÇåÁã
+			g_Comm[bCOMn].RxFrame.baPld[g_Comm[bCOMn].wRxIndex++] = bRxData;
+			m_bRxCRC						+=  bRxData;
+		
+			if(g_Comm[bCOMn].wRxIndex == g_Comm[bCOMn].wRxPldLen)
+			{
+				g_Comm[bCOMn].bRxState		= 4;
+			}		
+			break;
+		
+		case 4:	// ½ÓÊÕCRC
+			g_Comm[bCOMn].hRxTimerCnt		= 0;		// ×Ö·û¼ä¸ô³¬Ê±¶¨Ê±Æ÷ÇåÁã
+		
+			m_bRxCRC						+=  bRxData;
+			if(m_bRxCRC == 0)
+			{// CRCÕýÈ·
+				g_Comm[bCOMn].RxFrame.bCRC	= bRxData;
+				g_Comm[bCOMn].bTxDone		= 1;
+			}
+			else
+			{// CRC´íÎó
+			}
+			g_Comm[bCOMn].bRxTimerEn		= 0;
+			g_Comm[bCOMn].hRxTimerCnt		= 0;
+			g_Comm[bCOMn].bRxState			= 0;
+			break;
+		
+		default:
+			g_Comm[bCOMn].bRxTimerEn		= 0;
+			g_Comm[bCOMn].hRxTimerCnt		= 0;
+			g_Comm[bCOMn].bRxState			= 0;
+			break;
+	}// end of switch()...
+}
+
+void Comm_LinkTxByte(uint8_t bCOMn)
+{
+	static uint8_t m_bTxPldLenMSByte = 0;
+	static uint8_t m_bTxCRC	= 0;
+	
+	if(g_Comm[bCOMn].wTxPldLen == 0)
+	{
+		g_Comm[bCOMn].bTxDone = 1;
+		
+		return;
+	}
+	
+	switch(g_Comm[bCOMn].bTxState)
+	{
+		case 0:	// ·¢ËÍÖ¡Í·
+			
+			break;
+		
+		case 1:	// ·¢ËÍµØÖ·
+			break;
+		case 2:	// ·¢ËÍ³¤¶È
+			break;
+		case 3:	// ·¢ËÍPayload
+			break;
+		case 4:	// ·¢ËÍCRC
+			break;
+		default:
+			g_Comm[bCOMn].bTxState			= 0;
+			break;
+	}// end of switch(...)
+}
+
+uint8_t Comm_LinkGetPld()
+{
+	uint8_t m_bCOMn;
+	
+	return m_bCOMn;
+}
+
+uint8_t Comm_LinkSendPld(uint8_t bCOMn, uint8_t bFrameType, uint8_t *pbPld, uint32_t wPldLen)
+{
+	if(wPldLen > LINK_PLD_MAX_SIZE)
+		return 1;
+	if(g_Comm[bCOMn].bTxDone)
+		return 2;
+	// Êý¾Ý´ò°ü
+	g_Comm[bCOMn].TxFrame.bSof	= bFrameType;
+	g_Comm[bCOMn].TxFrame.bAddr	= g_bCommAddr;
+	g_Comm[bCOMn].TxFrame.bLenH = (uint8_t)(wPldLen>>16) & 0xFF;
+	g_Comm[bCOMn].TxFrame.bLenL = (uint8_t)(wPldLen&0xFF);
+	memcpy(g_Comm[bCOMn].TxFrame.baPld, pbPld, wPldLen);
+	g_Comm[bCOMn].TxFrame.bCRC	= CheckSum( &g_Comm[bCOMn].TxFrame.bSof, wPldLen+2);
+	// 
+	g_Comm[bCOMn].wTxPldLen = wPldLen;
+	Comm_LinkTxByte(bCOMn);
+	
+	return 0;
+}
+/*********************************************************************************************************
+  End Of File
+*********************************************************************************************************/
